@@ -1,0 +1,158 @@
+{
+  "scenario": "东盟农业机器人现场反馈迭代仓",
+  "synthetic": true,
+  "records": [
+    {
+      "record_id": "field_observation-001",
+      "payload": {
+        "country": "country-0",
+        "crop_type": "crop_type-1",
+        "device_model": "device_model-2",
+        "firmware_version": "firmware_version-3",
+        "symptom_code": "symptom_code-4",
+        "severity": 21.5,
+        "weather": "weather-1",
+        "terrain": "terrain-2",
+        "operator_skill": 27.2,
+        "reproduction_rate": 0.47,
+        "affected_units": 31.0,
+        "translation_confidence": 0.69
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    },
+    {
+      "record_id": "field_observation-002",
+      "payload": {
+        "country": "country-1",
+        "crop_type": "crop_type-2",
+        "device_model": "device_model-3",
+        "firmware_version": "firmware_version-4",
+        "symptom_code": "symptom_code-0",
+        "severity": 25.2,
+        "weather": "weather-2",
+        "terrain": "terrain-3",
+        "operator_skill": 30.9,
+        "reproduction_rate": 0.58,
+        "affected_units": 34.7,
+        "translation_confidence": 0.8
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    },
+    {
+      "record_id": "field_observation-003",
+      "payload": {
+        "country": "country-2",
+        "crop_type": "crop_type-3",
+        "device_model": "device_model-4",
+        "firmware_version": "firmware_version-0",
+        "symptom_code": "symptom_code-1",
+        "severity": 28.9,
+        "weather": "weather-3",
+        "terrain": "terrain-4",
+        "operator_skill": 34.6,
+        "reproduction_rate": 0.69,
+        "affected_units": 38.4,
+        "translation_confidence": 0.91
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    },
+    {
+      "record_id": "field_observation-004",
+      "payload": {
+        "country": "country-3",
+        "crop_type": "crop_type-4",
+        "device_model": "device_model-0",
+        "firmware_version": "firmware_version-1",
+        "symptom_code": "symptom_code-2",
+        "severity": 32.6,
+        "weather": "weather-4",
+        "terrain": "terrain-0",
+        "operator_skill": 38.3,
+        "reproduction_rate": 0.8,
+        "affected_units": 42.1,
+        "translation_confidence": 0.25
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    },
+    {
+      "record_id": "field_observation-005",
+      "payload": {
+        "country": "country-4",
+        "crop_type": "crop_type-0",
+        "device_model": "device_model-1",
+        "firmware_version": "firmware_version-2",
+        "symptom_code": "symptom_code-3",
+        "severity": 36.3,
+        "weather": "weather-0",
+        "terrain": "terrain-1",
+        "operator_skill": 42.0,
+        "reproduction_rate": 0.91,
+        "affected_units": 45.8,
+        "translation_confidence": 0.36
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    },
+    {
+      "record_id": "field_observation-006",
+      "payload": {
+        "country": "country-0",
+        "crop_type": "crop_type-1",
+        "device_model": "device_model-2",
+        "firmware_version": "firmware_version-3",
+        "symptom_code": "symptom_code-4",
+        "severity": 40.0,
+        "weather": "weather-1",
+        "terrain": "terrain-2",
+        "operator_skill": 45.7,
+        "reproduction_rate": 0.25,
+        "affected_units": 49.5,
+        "translation_confidence": 0.47
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    },
+    {
+      "record_id": "field_observation-007",
+      "payload": {
+        "country": "country-1",
+        "crop_type": "crop_type-2",
+        "device_model": "device_model-3",
+        "firmware_version": "firmware_version-4",
+        "symptom_code": "symptom_code-0",
+        "severity": 43.7,
+        "weather": "weather-2",
+        "terrain": "terrain-3",
+        "operator_skill": 49.4,
+        "reproduction_rate": 0.36,
+        "affected_units": 53.2,
+        "translation_confidence": 0.58
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    },
+    {
+      "record_id": "field_observation-008",
+      "payload": {
+        "country": "country-2",
+        "crop_type": "crop_type-3",
+        "device_model": "device_model-4",
+        "firmware_version": "firmware_version-0",
+        "symptom_code": "symptom_code-1",
+        "severity": 47.4,
+        "weather": "weather-3",
+        "terrain": "terrain-4",
+        "operator_skill": 53.1,
+        "reproduction_rate": 0.47,
+        "affected_units": 56.9,
+        "translation_confidence": 0.69
+      },
+      "state": "reported",
+      "source": "synthetic-local-acceptance"
+    }
+  ]
+}

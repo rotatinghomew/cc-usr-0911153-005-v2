@@ -105,6 +105,12 @@ class RuleResult:
         return {"code": self.code, "passed": self.passed, "score": self.score,
                 "severity": self.severity, "message": self.message, "evidence": self.evidence}
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "RuleResult":
+        return cls(code=str(value["code"]), passed=bool(value["passed"]),
+                   score=finite_number(value["score"]), severity=str(value["severity"]),
+                   message=str(value["message"]), evidence=dict(value.get("evidence") or {}))
+
 
 @dataclass(frozen=True)
 class DomainRecord:
@@ -140,6 +146,15 @@ class DomainRecord:
         return stable_hash({"record_id": self.record_id, "payload": self.payload,
                             "state": self.state, "version": self.version,
                             "occurred_at": self.occurred_at, "source": self.source})
+
+    @property
+    def evidence_fingerprint(self) -> str:
+        """稳定标识现场证据本身，与状态、版本和时间戳无关。
+
+        同一份反馈重新导入时，即便重建出的记录版本号不同，证据指纹仍然相同；
+        只有报告内容（或来源）被真实修订后，该指纹才会变化，用于区分重试与新评议。
+        """
+        return stable_hash({"record_id": self.record_id, "payload": self.payload, "source": self.source})
 
     def with_state(self, state: str) -> "DomainRecord":
         return DomainRecord(self.record_id, self.payload, state, self.version + 1,
@@ -178,6 +193,15 @@ class Decision:
         return {"record_id": self.record_id, "outcome": self.outcome, "score": self.score,
                 "reasons": list(self.reasons), "rules": [item.as_dict() for item in self.rule_results],
                 "metrics": self.metrics, "decided_at": self.decided_at}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "Decision":
+        return cls(record_id=str(value["record_id"]), outcome=str(value["outcome"]),
+                   score=finite_number(value["score"]),
+                   reasons=tuple(str(item) for item in value.get("reasons", ())),
+                   rule_results=tuple(RuleResult.from_dict(item) for item in value.get("rules", ())),
+                   metrics={str(key): finite_number(item) for key, item in (value.get("metrics") or {}).items()},
+                   decided_at=str(value.get("decided_at") or utc_now()))
 
 
 def require_fields(record: DomainRecord, fields: Iterable[str] = REQUIRED_FIELDS) -> list[str]:

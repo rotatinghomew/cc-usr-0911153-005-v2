@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -16,7 +18,15 @@ def ensure_output(path: str | Path) -> Path:
 
 def write_json(path: Path, value: Any) -> str:
     body = json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2)
-    path.write_text(body + "\n", encoding="utf-8")
+    # 先写唯一临时文件再原子替换，避免两个复盘同时导出时读到写了一半的摘要，
+    # 也避免多个写者共用同一个 .tmp 路径而互相删除对方的临时文件。
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temporary.write_text(body + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
     return stable_hash(value)
 
 
@@ -47,22 +57,28 @@ def write_rules(path: Path, decisions: Mapping[str, Decision]) -> int:
     return count
 
 
-def build_summary(records: list[DomainRecord], decisions: Mapping[str, Decision], snapshot: Mapping[str, Any]) -> dict[str, Any]:
+def build_summary(records: list[DomainRecord], decisions: Mapping[str, Decision], snapshot: Mapping[str, Any],
+                  analyses: Iterable[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     outcomes: dict[str, int] = {}
     for decision in decisions.values():
         outcomes[decision.outcome] = outcomes.get(decision.outcome, 0) + 1
     scores = [decision.score for decision in decisions.values()]
+    analysis_rows = [dict(row) for row in (analyses or ())]
     return {"product": '东盟农业机器人现场反馈迭代仓', "entity": 'field_observation', "generated_at": utc_now(),
             "record_count": len(records), "decision_count": len(decisions), "outcomes": outcomes,
             "average_score": sum(scores) / len(scores) if scores else 0.0,
             "minimum_score": min(scores) if scores else 0.0, "maximum_score": max(scores) if scores else 0.0,
+            # 每条评议都可回溯到当时的证据版本、策略指纹与阶段依据，旧评议不会被重放覆盖。
+            "analyses": analysis_rows,
+            "analysis_count": len(analysis_rows),
             "repository": snapshot}
 
 
 def export_bundle(output: str | Path, records: list[DomainRecord], decisions: Mapping[str, Decision],
-                  snapshot: Mapping[str, Any], events: list[dict[str, Any]]) -> dict[str, Any]:
+                  snapshot: Mapping[str, Any], events: list[dict[str, Any]],
+                  analyses: Iterable[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     root = ensure_output(output)
-    summary = build_summary(records, decisions, snapshot)
+    summary = build_summary(records, decisions, snapshot, analyses)
     record_count = write_records(root / "records.csv", records, decisions)
     rule_count = write_rules(root / "rules.csv", decisions)
     summary_hash = write_json(root / "summary.json", summary)

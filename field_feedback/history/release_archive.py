@@ -60,9 +60,25 @@ CREATE TABLE IF NOT EXISTS runs(
     started_at TEXT NOT NULL,
     finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS analyses(
+    analysis_id TEXT PRIMARY KEY,
+    record_id TEXT NOT NULL,
+    record_version INTEGER NOT NULL,
+    evidence_fingerprint TEXT NOT NULL,
+    strategy_fingerprint TEXT NOT NULL,
+    decision_id TEXT NOT NULL,
+    from_state TEXT NOT NULL,
+    to_state TEXT NOT NULL,
+    advanced INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(record_id) REFERENCES records(record_id),
+    FOREIGN KEY(decision_id) REFERENCES decisions(decision_id),
+    UNIQUE(record_id, record_version, strategy_fingerprint)
+);
 CREATE INDEX IF NOT EXISTS idx_records_state ON records(state, updated_at);
 CREATE INDEX IF NOT EXISTS idx_events_aggregate ON events(aggregate_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_record ON decisions(record_id, decided_at);
+CREATE INDEX IF NOT EXISTS idx_analyses_record ON analyses(record_id, record_version);
 """
 
 
@@ -70,10 +86,75 @@ class Repository:
     def __init__(self, database: str | Path):
         self.database = str(database)
         self._lock = threading.RLock()
+        self._ambient = threading.local()
+        self._ambient.connection = None
+        self._ambient.savepoints = []
         Path(self.database).parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
+    @property
+    def ambient_connection(self) -> sqlite3.Connection | None:
+        return getattr(self._ambient, "connection", None)
+
+    @contextmanager
+    def unit_of_work(self) -> Iterator[sqlite3.Connection]:
+        """把一次请求的全部写入收拢到同一个事务里。
+
+        既支持嵌套（内层使用 SAVEPOINT，局部失败只回滚内层而不污染外层），
+        又借助 BEGIN IMMEDIATE 让两个同时到达的复盘在数据库层面串行化，
+        保证服务中断或并发重放时不会只落下一半结果。
+        """
+        existing = self.ambient_connection
+        if existing is not None:
+            savepoint = f"sp_{id(existing)}_{len(self._ambient.savepoints)}"
+            existing.execute(f"SAVEPOINT {savepoint}")
+            self._ambient.savepoints.append(savepoint)
+            try:
+                yield existing
+                existing.execute(f"RELEASE SAVEPOINT {savepoint}")
+            except Exception:
+                existing.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                existing.execute(f"RELEASE SAVEPOINT {savepoint}")
+                raise
+            finally:
+                self._ambient.savepoints.pop()
+            return
+        with self._lock:
+            connection = self.connect()
+            self._ambient.connection = connection
+            self._ambient.savepoints = []
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+            finally:
+                self._ambient.connection = None
+                self._ambient.savepoints = []
+                connection.close()
+
     def connect(self) -> sqlite3.Connection:
+        ambient = self.ambient_connection
+        if ambient is not None:
+            # 环境连接的事务边界由最外层 unit_of_work 掌管；
+            # sqlite3 连接自带的上下文管理器会在退出时自动 commit，
+            # 会提前释放 SAVEPOINT，因此返回一个提交/回滚均为空操作的包装。
+            class _AmbientConnection:
+                def __init__(self, connection: sqlite3.Connection):
+                    self._connection = connection
+
+                def __enter__(self):
+                    return self._connection
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def __getattr__(self, name):
+                    return getattr(self._connection, name)
+
+            return _AmbientConnection(ambient)  # type: ignore[return-value]
         connection = sqlite3.connect(self.database, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys=ON")
@@ -86,6 +167,12 @@ class Repository:
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
+        if self.ambient_connection is not None:
+            # 嵌套在 unit_of_work 内时，通过 SAVEPOINT 参与同一事务，
+            # 局部写入失败会回滚到保存点而不是污染外层事务。
+            with self.unit_of_work() as connection:
+                yield connection
+            return
         with self._lock:
             connection = self.connect()
             try:
@@ -185,6 +272,73 @@ class Repository:
             if owns:
                 connection.close()
 
+    def get_analysis(self, record_id: str, record_version: int,
+                     strategy_fingerprint: str) -> Mapping[str, Any] | None:
+        """返回同一证据版本与同一分析策略下已经落库的有效评议；不存在时返回 None。"""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM analyses WHERE record_id=? AND record_version=? AND strategy_fingerprint=?",
+                (record_id, record_version, strategy_fingerprint)).fetchone()
+        return dict(row) if row else None
+
+    def has_analysis_for_version(self, record_id: str, record_version: int) -> bool:
+        """判断该证据版本是否已经做过任何一次评议（无论策略是否相同）。"""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM analyses WHERE record_id=? AND record_version=? LIMIT 1",
+                (record_id, record_version)).fetchone()
+        return row is not None
+
+    def save_analysis(self, record: DomainRecord, decision: Decision, strategy_fingerprint: str,
+                      from_state: str, to_state: str) -> Mapping[str, Any]:
+        """登记一次新的分析依据，并写入幂等台账。
+
+        analysis_id 由证据指纹、策略指纹和目标记录版本共同决定：同一请求重试会命中同一行，
+        而补充证据产生的新版本、或策略调整后的再分析，才会形成新的一行。
+        """
+        analysis_id = stable_hash({
+            "record_id": record.record_id,
+            "record_version": record.version,
+            "evidence_fingerprint": record.evidence_fingerprint,
+            "strategy_fingerprint": strategy_fingerprint,
+        })[:24]
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM analyses WHERE record_id=? AND record_version=? AND strategy_fingerprint=?",
+                (record.record_id, record.version, strategy_fingerprint)).fetchone()
+            if existing is not None:
+                if existing["decision_id"] != decision.fingerprint or existing["to_state"] != to_state:
+                    raise ContractError("conflicting analysis replay")
+                return dict(existing)
+            created_at = utc_now()
+            connection.execute(
+                "INSERT INTO analyses(analysis_id,record_id,record_version,evidence_fingerprint,"
+                "strategy_fingerprint,decision_id,from_state,to_state,advanced,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (analysis_id, record.record_id, record.version, record.evidence_fingerprint,
+                 strategy_fingerprint, decision.fingerprint, from_state, to_state,
+                 1 if to_state != from_state else 0, created_at))
+            self.append_event(connection, "analysis.saved", record.record_id,
+                              self.event_count(record.record_id, connection) + 1,
+                              {"analysis_id": analysis_id, "evidence_fingerprint": record.evidence_fingerprint,
+                               "strategy_fingerprint": strategy_fingerprint, "decision_id": decision.fingerprint,
+                               "from_state": from_state, "to_state": to_state})
+        row = self.get_analysis(record.record_id, record.version, strategy_fingerprint)
+        assert row is not None
+        return row
+
+    def get_decision(self, decision_id: str) -> Decision | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT decision_json FROM decisions WHERE decision_id=?",
+                                     (decision_id,)).fetchone()
+        return Decision.from_dict(json.loads(row[0])) if row else None
+
+    def analysis_rows(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM analyses ORDER BY record_id,record_version,strategy_fingerprint").fetchall()
+        return [dict(row) for row in rows]
+
     def begin_run(self, fixture_hash: str, record_count: int) -> str:
         run_id = stable_hash({"fixture_hash": fixture_hash, "record_count": record_count})[:24]
         with self.transaction() as connection:
@@ -205,13 +359,23 @@ class Repository:
             raise ContractError("stored run result is invalid")
         return result
 
-    def finish_run(self, run_id: str, result: Mapping[str, Any]) -> None:
+    def finish_run(self, run_id: str, result: Mapping[str, Any]) -> dict[str, Any]:
+        """幂等结束一次复盘运行：重复或并发完成同一 run 时返回已落库的结果。"""
         with self.transaction() as connection:
+            row = connection.execute("SELECT status,result_json FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            if row is None:
+                raise ContractError("unknown run")
+            if row["status"] == "finished":
+                stored = json.loads(row["result_json"])
+                if not isinstance(stored, dict):
+                    raise ContractError("stored run result is invalid")
+                return stored
             changed = connection.execute("UPDATE runs SET status='finished',result_json=?,finished_at=? WHERE run_id=?",
                                          (canonical_json(result), utc_now(), run_id)).rowcount
             if changed != 1:
                 raise ContractError("unknown run")
             self.append_event(connection, "run.finished", run_id, 1, dict(result))
+        return dict(result)
 
     def verify_chain(self) -> list[str]:
         errors: list[str] = []
@@ -233,7 +397,7 @@ class Repository:
     def snapshot(self) -> dict[str, Any]:
         with self.connect() as connection:
             counts = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                      for table in ("records", "record_versions", "decisions", "events", "runs")}
+                      for table in ("records", "record_versions", "decisions", "analyses", "events", "runs")}
             states = {row[0]: row[1] for row in connection.execute("SELECT state,COUNT(*) FROM records GROUP BY state")}
         return {"counts": counts, "states": states, "chain_errors": self.verify_chain()}
 
